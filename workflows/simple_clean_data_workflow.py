@@ -5,6 +5,7 @@ from langgraph.graph import StateGraph, START, END
 from dotenv import load_dotenv
 from pathlib import Path
 import io
+from IPython.display import Image, display
 
 # Load environment variables from .env file
 load_dotenv()
@@ -64,7 +65,7 @@ def summarize_data(state: DataState) -> DataState:
 
 
 def reasoning_node(state: DataState) -> DataState:
-    """Use LLM to decide whether to clean missing values or remove outliers."""
+    """Use LLM to decide whether to clean missing values or remove outliers or both."""
     prompt = (
         "You are a data science assistant. "
         "Given this dataset summary, decide which single action is most appropriate: "
@@ -104,6 +105,25 @@ def remove_outliers(state: DataState) -> DataState:
     state["df"] = df
     return state
 
+def both(state: DataState) -> DataState:#+++++++++++++++++++++++++++++++++++++++++++++++++
+    """Fill missing numeric values with the column mean and Remove outliers using IQR method."""
+    df = state["df"].copy()
+    for col in df.select_dtypes(include="number").columns:
+        df[col] = df[col].fillna(df[col].mean())
+    
+    numeric_cols = df.select_dtypes(include="number").columns
+    
+    for col in numeric_cols:
+        Q1 = df[col].quantile(0.25)
+        Q3 = df[col].quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
+        df = df[(df[col] >= lower_bound) & (df[col] <= upper_bound)]
+
+    state["df"] = df
+    return state
+
 
 def describe_data(state: DataState) -> DataState:
     """Describe numeric columns after any cleaning."""
@@ -125,6 +145,7 @@ def route_action(state: DataState) -> str:
     mapping = {
         "clean_missing": "handle_missing_values",
         "remove_outliers": "remove_outliers",
+        "both": "both",#+++++++++++++++++++++++++++++++++++++++++++++++++++
         "none": "describe_data",
     }
     return mapping.get(state["action"], "describe_data")
@@ -141,6 +162,7 @@ workflow.add_node("summarize_data", summarize_data)
 workflow.add_node("reasoning_node", reasoning_node)
 workflow.add_node("handle_missing_values", handle_missing_values)
 workflow.add_node("remove_outliers", remove_outliers)
+workflow.add_node("both", both)#+++++++++++++++++++++++++++++
 workflow.add_node("describe_data", describe_data)
 workflow.add_node("output_results", output_results)
 
@@ -150,10 +172,12 @@ workflow.add_edge("summarize_data", "reasoning_node")
 workflow.add_conditional_edges("reasoning_node", route_action, {
     "handle_missing_values": "handle_missing_values",
     "remove_outliers": "remove_outliers",
+    "both": "both",#++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     "describe_data": "describe_data",
 })
 workflow.add_edge("handle_missing_values", "describe_data")
 workflow.add_edge("remove_outliers", "describe_data")
+workflow.add_edge("both", "describe_data")#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 workflow.add_edge("describe_data", "output_results")
 workflow.add_edge("output_results", END)
 
@@ -184,7 +208,7 @@ if __name__ == "__main__":
     save_graph_visualization()
     
     # Run the workflow
-    csv_path = str(PROJECT_ROOT / "data" / "missing.csv")
+    csv_path = str(PROJECT_ROOT / "data" / "missing_and_outliers.csv")
     init_state: DataState = {
         "csv_path": csv_path,
         "df": None,
